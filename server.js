@@ -44,6 +44,8 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/delivery', require('./routes/delivery'));
 app.use('/api/payment', require('./routes/payment'));
 
+app.get('/', (req, res) => res.json({ success: true, message: 'FreshMart Backend Running Successfully' }));
+
 app.get('/api/health', (req, res) => res.json({ status: 'OK', message: 'FreshMart API running' }));
 
 // Error handler
