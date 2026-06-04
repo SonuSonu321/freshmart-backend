@@ -7,11 +7,50 @@ const Coupon = require('../models/Coupon');
 const { protect } = require('../middleware/auth');
 const sendSMS = require('../utils/sendSMS');
 const sendEmail = require('../utils/sendEmail');
+const { getDistanceKm } = require('../utils/distance');
+
+const SHOP_LAT = parseFloat(process.env.SHOP_LAT || '28.6139');
+const SHOP_LNG = parseFloat(process.env.SHOP_LNG || '77.2090');
+const DELIVERY_RADIUS_KM = parseFloat(process.env.DELIVERY_RADIUS_KM || '4');
+
+// Check delivery availability
+router.post('/check-delivery', async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+    if (!lat || !lng) {
+      return res.json({ available: true, message: 'Location not provided, assuming deliverable' });
+    }
+    const distance = getDistanceKm(SHOP_LAT, SHOP_LNG, lat, lng);
+    const available = distance <= DELIVERY_RADIUS_KM;
+    res.json({
+      available,
+      distance: distance.toFixed(2),
+      maxRadius: DELIVERY_RADIUS_KM,
+      message: available
+        ? `Great! We deliver to your area (${distance.toFixed(1)} km from our shop)`
+        : `Sorry, we currently deliver only within ${DELIVERY_RADIUS_KM} km of our shop. Your location is ${distance.toFixed(1)} km away.`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // Place order
 router.post('/', protect, async (req, res) => {
   try {
     const { deliveryAddress, paymentMethod, razorpayOrderId, razorpayPaymentId } = req.body;
+
+    // Delivery radius check
+    const coords = deliveryAddress?.coordinates;
+    if (coords?.lat && coords?.lng) {
+      const distance = getDistanceKm(SHOP_LAT, SHOP_LNG, coords.lat, coords.lng);
+      if (distance > DELIVERY_RADIUS_KM) {
+        return res.status(400).json({
+          success: false,
+          message: `Sorry! We only deliver within ${DELIVERY_RADIUS_KM} km of our shop. Your location is ${distance.toFixed(1)} km away. We're working on expanding our delivery area soon! 🚀`
+        });
+      }
+    }
     const cart = await Cart.findOne({ user: req.user._id }).populate('items.product');
     if (!cart || cart.items.length === 0) return res.status(400).json({ success: false, message: 'Cart is empty' });
 
