@@ -72,7 +72,7 @@ router.post('/', protect, async (req, res) => {
       subtotal += item.price * item.quantity;
     }
 
-    const deliveryFee = subtotal >= 500 ? 0 : 40;
+    const deliveryFee = subtotal >= 500 ? 0 : 25;
     const discount = cart.discountAmount || 0;
     const totalAmount = subtotal + deliveryFee - discount;
 
