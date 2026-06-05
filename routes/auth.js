@@ -2,10 +2,65 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
+const OTP = require('../models/OTP');
 const generateToken = require('../utils/generateToken');
 const { protect } = require('../middleware/auth');
+const sendSMS = require('../utils/sendSMS');
 
-// Register
+// Generate 6-digit OTP
+const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+// Send OTP
+router.post('/send-otp', async (req, res) => {
+  try {
+    const { mobile } = req.body;
+    if (!mobile) return res.status(400).json({ success: false, message: 'Mobile number required' });
+
+    const exists = await User.findOne({ mobile });
+    if (exists) return res.status(400).json({ success: false, message: 'Mobile already registered' });
+
+    // Delete old OTPs for this mobile
+    await OTP.deleteMany({ mobile });
+
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    await OTP.create({ mobile, otp, expiresAt });
+
+    // Send SMS
+    await sendSMS(mobile, `Your FreshMart OTP is: ${otp}. Valid for 10 minutes. Do not share with anyone.`);
+
+    // In development, also log OTP
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[OTP] Mobile: ${mobile}, OTP: ${otp}`);
+    }
+
+    res.json({ success: true, message: `OTP sent to ${mobile.slice(0, 3)}XXXXXXX${mobile.slice(-2)}` });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Verify OTP
+router.post('/verify-otp', async (req, res) => {
+  try {
+    const { mobile, otp } = req.body;
+    const record = await OTP.findOne({ mobile, verified: false });
+
+    if (!record) return res.status(400).json({ success: false, message: 'OTP not found. Please request a new one.' });
+    if (new Date() > record.expiresAt) return res.status(400).json({ success: false, message: 'OTP expired. Please request a new one.' });
+    if (record.otp !== otp) return res.status(400).json({ success: false, message: 'Invalid OTP. Please try again.' });
+
+    record.verified = true;
+    await record.save();
+
+    res.json({ success: true, message: 'OTP verified successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Register (requires OTP verified first)
 router.post('/register', [
   body('name').notEmpty().trim(),
   body('mobile').notEmpty().trim().isLength({ min: 10, max: 15 }),
@@ -16,6 +71,13 @@ router.post('/register', [
 
   try {
     const { name, mobile, email, password, referralCode } = req.body;
+
+    // Check OTP was verified
+    const otpRecord = await OTP.findOne({ mobile, verified: true });
+    if (!otpRecord) {
+      return res.status(400).json({ success: false, message: 'Mobile number not verified. Please verify OTP first.' });
+    }
+
     const exists = await User.findOne({ mobile });
     if (exists) return res.status(400).json({ success: false, message: 'Mobile already registered' });
 
@@ -26,6 +88,10 @@ router.post('/register', [
     }
 
     const user = await User.create({ name, mobile, email, password, referredBy });
+
+    // Clean up OTP records
+    await OTP.deleteMany({ mobile });
+
     res.status(201).json({
       success: true,
       token: generateToken(user._id, user.role),
